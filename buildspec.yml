@@ -1,0 +1,46 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      php: 8.2
+    commands:
+      # Install AWS CLI using pip
+      - pip install awscli --upgrade --user
+      # Add AWS CLI installation directory to the PATH
+      - export PATH=$PATH:$HOME/.local/bin
+
+  pre_build: # commands to be run before build
+    commands:
+      - echo Logging in to Amazon ECR....
+      - aws --version
+
+      # Retrieve parameters from AWS SSM and set AWS CLI configuration
+      - APP_ENV=$(aws ssm get-parameter --with-decryption --name APP_ENV --region eu-north-1 --query 'Parameter.Value' --output text)
+      - echo "$APP_ENV" | jq -r '.AWS_ACCESS_KEY_ID' | xargs -I {} aws configure set aws_access_key_id {}
+      - echo "$APP_ENV" | jq -r '.AWS_SECRET_ACCESS_KEY' | xargs -I {} aws configure set aws_secret_access_key {}
+      - echo "$APP_ENV" | jq -r '.AWS_REGION' | xargs -I {} aws configure set default.region {}
+
+      # login to Elastic container registry
+      - aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 430674372925.dkr.ecr.eu-north-1.amazonaws.com
+
+  build:
+    commands:
+      - echo Build started on `date`
+      - echo installing composer..
+      - composer install
+      - echo creating .env file..
+      # Retrieve parameters from AWS SSM and update .env file
+      - aws ssm get-parameter --with-decryption --name APP_ENV --region eu-north-1 --query 'Parameter.Value' --output text > .env
+      - echo generating app key
+      - php artisan key:generate
+      - echo Building the Docker image...
+      - docker build -t hibaend .
+      - docker tag hibaend:latest 430674372925.dkr.ecr.eu-north-1.amazonaws.com/hibaend:latest
+
+  post_build:
+    commands:
+      - echo Build completed on `date`
+      - echo Pushing the Docker image...
+      - docker image ls -a
+      - docker push 430674372925.dkr.ecr.eu-north-1.amazonaws.com/hibaend:latest
